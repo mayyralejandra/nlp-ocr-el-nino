@@ -159,8 +159,8 @@ def pagina_inicio():
     st.subheader("Cómo usar la aplicación")
     st.markdown(
         "1. En **Carga y extracción**, sube imágenes (JPG, JPEG, PNG) o PDF y revisa el texto extraído y limpio.\n"
-        "2. En **Análisis NLP**, consulta los términos frecuentes, palabras clave y resúmenes del corpus del "
-        "equipo o de tus documentos.\n"
+        "2. En **Análisis NLP**, obtén para tu documento un resumen automático, palabras clave, nube de "
+        "palabras, entidades (instituciones, lugares, fechas) y temas.\n"
         "3. En **Clasificación**, obtén la clase predicha, su probabilidad y los términos que más pesan.\n"
         "4. En **Conjunto de datos**, filtra los documentos registrados por el equipo.\n"
         "5. En **Descargas**, guarda textos y tablas generados."
@@ -316,147 +316,243 @@ def pagina_carga():
 
 
 # ============================================================================
-# Análisis NLP
+# Análisis NLP (sobre el documento cargado)
 # ============================================================================
+def fuentes_nlp() -> tuple[list[dict], bool]:
+    """Documentos cargados; si no hay, permite probar con uno del conjunto del equipo (ejemplo)."""
+    docs = [d for d in st.session_state.get("docs", []) if d["estado"] == "Procesado"]
+    if docs:
+        return docs, False
+    df = estado["df"]
+    if df is None:
+        return [], False
+    st.info("Aún no cargaste documentos (hazlo en **Carga y extracción**). Mientras tanto puedes probar "
+            "las técnicas con un documento de ejemplo del equipo.")
+    ej = df[df["con_texto"]]
+    k = st.selectbox("Documento de ejemplo", ej.index, format_func=lambda i: ej.loc[i, "archivo"],
+                     key="nlp_ejemplo")
+    return [{"nombre": ej.loc[k, "archivo"], "texto": ej.loc[k, "texto_ocr"]}], True
+
+
+def nube_palabras(frecuencias: dict):
+    from wordcloud import WordCloud
+    wc = WordCloud(width=1000, height=450, background_color="white", colormap="Blues",
+                   collocations=False, prefer_horizontal=0.9).generate_from_frequencies(frecuencias)
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    ax.imshow(wc, interpolation="bilinear")
+    ax.axis("off")
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+
+def pagina_nlp():
+    st.title("Análisis de lenguaje (NLP)")
+    st.markdown("El **Procesamiento de Lenguaje Natural (NLP)** son técnicas para que el computador "
+                "\"lea\" un texto. Aquí se aplican al **documento que cargaste**: resumen automático, "
+                "palabras clave, nube de palabras, extracción de entidades, temas y clasificación.")
+    docs, es_ejemplo = fuentes_nlp()
+    if not docs:
+        return
+    k = 0
+    if len(docs) > 1:
+        k = st.selectbox("Documento a analizar", range(len(docs)), format_func=lambda i: docs[i]["nombre"],
+                         key="nlp_doc")
+    d = docs[k]
+    base = nombre_seguro(d["nombre"])
+    texto = d["texto"]
+    norm = nlp.normalizar_nlp(texto)
+    est = nlp.estadisticas_documento(texto, norm)
+    st.caption(f"Documento: **{d['nombre']}**" + (" (ejemplo del conjunto del equipo)" if es_ejemplo else ""))
+    c = st.columns(4)
+    c[0].metric("Palabras", est["palabras"])
+    c[1].metric("Palabras relevantes", est["terminos_normalizados"],
+                help="Palabras que quedan al quitar artículos, preposiciones y otras palabras vacías.")
+    c[2].metric("Palabras distintas", est["terminos_unicos"])
+    c[3].metric("Caracteres", est["caracteres"])
+    if est["terminos_normalizados"] < modelo.MIN_TOKENS:
+        st.warning("El texto es muy corto o no se extrajo bien; los resultados no serán representativos.")
+
+    t_res, t_kw, t_nube, t_ent, t_tema, t_clf, t_corp = st.tabs(
+        ["Resumen", "Palabras clave", "Nube de palabras", "Entidades", "Temas", "Clasificación",
+         "Conjunto del equipo"])
+
+    with t_res:
+        st.markdown("**Resumen automático (extractivo)**")
+        st.caption("El programa elige las oraciones más importantes del propio documento. No escribe "
+                   "texto nuevo, así que puede arrastrar errores del OCR. Conviene leerlo junto al original.")
+        n_or = st.slider("Número de oraciones del resumen", 2, 6, 3, key="n_or")
+        resumen = nlp.resumen_extractivo(texto, n=n_or)
+        st.write(resumen if resumen.strip() else "No hay suficiente texto para resumir.")
+        registrar_tabla(f"resumen_{base}.csv", pd.DataFrame({"archivo": [d["nombre"]], "resumen": [resumen]}))
+
+    with t_kw:
+        n = st.slider("Cantidad de palabras", 5, 25, 12, key="n_kw")
+        a, b = st.columns(2)
+        with a:
+            st.markdown("**Más repetidas**")
+            st.caption("Palabras relevantes que más veces aparecen en el documento.")
+            frec = nlp.frecuencia_terminos([norm], n)[["termino", "frecuencia"]]
+            if frec.empty:
+                st.info("No hay palabras para mostrar.")
+            else:
+                barras_h(frec, "frecuencia", "termino", "Veces que aparece", "Apariciones")
+                registrar_tabla(f"frecuencia_{base}.csv", frec)
+        with b:
+            st.markdown("**Más distintivas de este documento**")
+            df_ref = estado["df"]
+            if df_ref is None:
+                st.info("Se necesita el conjunto de datos para esta comparación.")
+            else:
+                st.caption("Palabras importantes aquí y poco comunes en los demás documentos del conjunto "
+                           "del equipo (técnica TF-IDF). Ayudan a ver de qué trata específicamente.")
+                ref = df_ref[df_ref["archivo"] != d["nombre"]]["texto_norm"]
+                kw = nlp.palabras_distintivas(norm, ref, n)
+                if kw.empty:
+                    st.info("No hay palabras para mostrar.")
+                else:
+                    barras_h(kw, "peso", "termino", "Importancia relativa", "Peso TF-IDF", color=GRIS)
+                    registrar_tabla(f"palabras_clave_{base}.csv", kw)
+
+    with t_nube:
+        st.caption("Cuanto más grande aparece una palabra, más veces se repite en el documento.")
+        frecs = nlp.frecuencia_terminos([norm], 60)
+        if len(frecs) < 3:
+            st.info("No hay suficientes palabras para dibujar la nube.")
+        else:
+            nube_palabras(dict(zip(frecs["termino"], frecs["frecuencia"])))
+
+    with t_ent:
+        st.markdown("**Entidades encontradas en el texto**")
+        st.caption("Se buscan instituciones, lugares, fechas y cifras con listas y patrones de escritura. "
+                   "No es un modelo entrenado: puede omitir entidades que no estén en la lista o escribirse "
+                   "distinto por errores del OCR.")
+        ents = nlp.extraer_entidades(texto)
+        cols = st.columns(2)
+        for i, (nombre, tabla) in enumerate(ents.items()):
+            with cols[i % 2]:
+                st.markdown(f"*{nombre}*")
+                if tabla.empty:
+                    st.write("No se encontraron.")
+                else:
+                    st.dataframe(tabla, hide_index=True, width="stretch")
+        todo = pd.concat([t.rename(columns={t.columns[0]: "entidad"}).assign(tipo=n)
+                          for n, t in ents.items() if not t.empty], ignore_index=True) \
+            if any(not t.empty for t in ents.values()) else pd.DataFrame()
+        if not todo.empty:
+            registrar_tabla(f"entidades_{base}.csv", todo[["tipo", "entidad", "veces"]])
+
+    with t_tema:
+        st.markdown("**Temas mencionados**")
+        st.caption("Cuenta cuántas palabras de cada grupo temático aparecen en el documento (por ejemplo, "
+                   "\"lluvia\", \"temperatura\" para Clima). Es un conteo con listas de palabras, no un modelo; "
+                   "sirve como orientación general.")
+        temas = nlp.temas_mencionados(texto)
+        if temas["menciones"].sum() == 0:
+            st.info("No se encontraron palabras de los grupos temáticos.")
+        else:
+            barras_h(temas, "menciones", "tema", "Menciones por tema", "Palabras encontradas")
+            registrar_tabla(f"temas_{base}.csv", temas)
+
+    with t_clf:
+        r = clasificar(texto)
+        if r["error"]:
+            st.warning(r["error"])
+        else:
+            mostrar_resultado_simple(r)
+            st.caption("Más detalle en la sección **Clasificación**.")
+
+    with t_corp:
+        st.caption("Datos del conjunto de documentos reunido por el equipo (no del documento cargado). "
+                   "Sirve para comparar.")
+        df = estado["df"]
+        if df is None:
+            st.error(estado["err_df"])
+        else:
+            clase = st.radio("Documentos incluidos", ["Todos", "El Niño", "No El Niño"], horizontal=True)
+            sub = df[df["con_texto"]]
+            if clase != "Todos":
+                sub = sub[sub["etiqueta_nombre"] == clase]
+            st.write(f"{len(sub)} documentos con texto.")
+            bloque_terminos(sub["texto_norm"], "corpus", clase.lower().replace(" ", "_"))
+
+
 def bloque_terminos(textos_norm, clave: str, etiqueta_tabla: str):
     n = st.slider("Número de términos", 5, 30, 15, key=f"n_{clave}")
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Frecuencia de términos**")
-        st.caption("Veces que aparece cada término (tras normalizar y quitar palabras vacías) y en cuántos "
-                   "documentos aparece.")
         frec = nlp.frecuencia_terminos(textos_norm, n)
-        if frec.empty:
-            st.info("No hay términos para mostrar.")
-        else:
+        if not frec.empty:
             barras_h(frec, "frecuencia", "termino", "Frecuencia absoluta", "Apariciones")
             st.dataframe(frec, hide_index=True, width="stretch")
             registrar_tabla(f"frecuencia_terminos_{etiqueta_tabla}.csv", frec)
     with c2:
         st.markdown("**Palabras clave (TF-IDF promedio)**")
-        st.caption("Términos y bigramas con mayor peso TF-IDF medio. Destacan palabras características "
-                   "del conjunto, no necesariamente las más repetidas.")
         kw = nlp.palabras_clave_tfidf(textos_norm, n)
-        if kw.empty:
-            st.info("No hay términos para mostrar.")
-        else:
+        if not kw.empty:
             barras_h(kw, "tfidf_promedio", "termino", "TF-IDF promedio", "TF-IDF promedio", color=GRIS)
             st.dataframe(kw.round(4), hide_index=True, width="stretch")
             registrar_tabla(f"palabras_clave_{etiqueta_tabla}.csv", kw)
 
 
-def pagina_nlp():
-    st.title("Análisis NLP")
-    t1, t2 = st.tabs(["Corpus del equipo", "Documentos cargados"])
-
-    with t1:
-        df = estado["df"]
-        if df is None:
-            st.error(estado["err_df"])
-        else:
-            st.caption("Cálculos sobre los textos OCR del conjunto de datos del equipo. Los documentos "
-                       "sin texto se excluyen.")
-            clase = st.radio("Documentos incluidos", ["Todos", "El Niño", "No El Niño"], horizontal=True)
-            sub = df[df["con_texto"]]
-            if clase != "Todos":
-                sub = sub[sub["etiqueta_nombre"] == clase]
-            st.write(f"**{len(sub)}** documentos con texto ({'ambas clases' if clase == 'Todos' else clase}); "
-                     f"{int((~df['con_texto']).sum())} registro(s) del conjunto sin texto excluido(s).")
-            bloque_terminos(sub["texto_norm"], "corpus", clase.lower().replace(" ", "_"))
-
-            st.subheader("Estadísticas descriptivas")
-            est = (df[df["con_texto"]].groupby("etiqueta_nombre")
-                   .agg(documentos=("archivo", "count"), palabras_media=("palabras", "mean"),
-                        palabras_mediana=("palabras", "median"), palabras_min=("palabras", "min"),
-                        palabras_max=("palabras", "max")).round(1).reset_index()
-                   .rename(columns={"etiqueta_nombre": "clase"}))
-            st.dataframe(est, hide_index=True, width="stretch")
-            registrar_tabla("estadisticas_descriptivas_corpus.csv", est)
-
-            st.subheader("Resumen extractivo de un documento")
-            st.caption("Selecciona las 3 oraciones con mayor peso TF-IDF del propio texto (método del "
-                       "notebook). No es un resumen redactado: puede heredar errores del OCR y debe "
-                       "revisarse manualmente.")
-            fila = st.selectbox("Documento", sub.index, format_func=lambda k: sub.loc[k, "archivo"],
-                                key="res_corpus")
-            if fila is not None:
-                st.write(nlp.resumen_extractivo(sub.loc[fila, "texto_ocr"]))
-
-    with t2:
-        docs = [d for d in st.session_state.get("docs", []) if d["estado"] == "Procesado"]
-        if not docs:
-            st.info("Aún no hay documentos procesados. Cárgalos en **Carga y extracción**.")
-        else:
-            st.caption("Cálculos sobre el documento seleccionado; no representan al conjunto de datos.")
-            k = st.selectbox("Documento", range(len(docs)), format_func=lambda i: docs[i]["nombre"],
-                             key="nlp_doc")
-            d = docs[k]
-            norm = nlp.normalizar_nlp(d["texto"])
-            est = nlp.estadisticas_documento(d["texto"], norm)
-            c = st.columns(4)
-            c[0].metric("Palabras", est["palabras"])
-            c[1].metric("Términos normalizados", est["terminos_normalizados"])
-            c[2].metric("Términos únicos", est["terminos_unicos"])
-            c[3].metric("Caracteres", est["caracteres"])
-            if est["terminos_normalizados"] < modelo.MIN_TOKENS:
-                st.warning("Texto muy corto: los resultados no son representativos.")
-            else:
-                n = st.slider("Número de términos", 5, 30, 15, key="n_doc")
-                frec = nlp.frecuencia_terminos([norm], n)
-                barras_h(frec[["termino", "frecuencia"]], "frecuencia", "termino",
-                         "Frecuencia en el documento", "Apariciones")
-                registrar_tabla(f"frecuencia_terminos_{nombre_seguro(d['nombre'])}.csv", frec)
-                st.markdown("**Resumen extractivo**")
-                st.write(nlp.resumen_extractivo(d["texto"]))
-                st.caption("Las oraciones provienen del texto extraído. Revísalas contra el original.")
-
-
 # ============================================================================
 # Clasificación
 # ============================================================================
+def mostrar_resultado_simple(r: dict):
+    """Resultado en lenguaje sencillo para cualquier persona."""
+    clase = r["clase"]
+    p = r["prob_nino"] if clase == 1 else 1 - r["prob_nino"]
+    acuerdo = r["votos_nino"] if clase == 1 else r["n_modelos"] - r["votos_nino"]
+    if clase == 1:
+        st.success("**Este documento parece tratar sobre El Fenómeno El Niño.**")
+    else:
+        st.info("**Este documento parece NO tratar sobre El Fenómeno El Niño.**")
+    nivel = "alta" if p >= 0.75 and acuerdo == r["n_modelos"] else "media" if p >= 0.6 else "baja"
+    c = st.columns(3)
+    c[0].metric("Seguridad del resultado", nivel.capitalize(),
+                help="Orientativa: depende de la probabilidad y de si los 5 modelos coinciden.")
+    c[1].metric("Probabilidad estimada", f"{p:.0%}")
+    c[2].metric("Modelos que coinciden", f"{acuerdo} de {r['n_modelos']}")
+    if r["cobertura_vocabulario"] < 0.5:
+        st.warning("El documento usa pocas palabras que los modelos conocen; el resultado es poco fiable.")
+    if r["n_terminos"] < 30:
+        st.warning("El texto es corto; el resultado puede cambiar fácilmente.")
+    if 0.4 <= r["prob_nino"] <= 0.6:
+        st.warning("El resultado está muy cerca del punto de duda (50 %); no es concluyente.")
+
+
 def mostrar_validacion():
-    st.subheader("Validación del equipo (sobre el conjunto de datos, no sobre documentos nuevos)")
     metricas = cargar_resultado("metricas_clasificador.csv")
     if metricas is None:
         st.info("No hay métricas de validación disponibles en la carpeta resultados/.")
         return
     st.markdown(
-        "Estas cifras son predicciones **fuera de entrenamiento** de la validación cruzada "
-        "(5 particiones por grupo): cada documento se predijo con el modelo que no lo vio. "
-        "Corresponden a los modelos individuales; **el promedio de los 5 modelos usado en esta aplicación "
-        "no fue evaluado como conjunto.**"
+        "Estas cifras salen de probar cada modelo con documentos que **no vio al entrenarse** (validación "
+        "cruzada de 5 particiones). Corresponden a los modelos individuales; **el promedio de los 5 modelos "
+        "que usa esta aplicación no fue evaluado como conjunto.**"
     )
     st.dataframe(metricas.round(3).reset_index(names="clase / promedio"), hide_index=True, width="stretch")
     cm = cargar_resultado("matriz_confusion.csv")
     if cm is not None:
-        fig, ax = plt.subplots(figsize=(4.2, 3.4))
-        ax.imshow(cm.values, cmap="Blues")
-        ax.set_xticks(range(2), [c.replace("pred: ", "") for c in cm.columns], fontsize=9)
-        ax.set_yticks(range(2), [i.replace("real: ", "") for i in cm.index], fontsize=9)
-        ax.set_xlabel("Predicción"); ax.set_ylabel("Etiqueta real")
-        ax.set_title("Matriz de confusión (validación cruzada)", fontsize=10)
-        for (r, c), v in zip([(r, c) for r in range(2) for c in range(2)], cm.values.ravel()):
-            ax.text(c, r, int(v), ha="center", va="center",
-                    color="white" if v > cm.values.max() / 2 else "#1F2933", fontsize=12)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+        st.markdown("**Matriz de confusión** (filas: clase real; columnas: clase predicha)")
+        st.dataframe(cm.reset_index(names=""), hide_index=True, width="stretch")
         registrar_tabla("matriz_confusion_validacion.csv", cm.reset_index(names="real"))
     registrar_tabla("metricas_validacion.csv", metricas.reset_index(names="clase"))
     st.caption(
-        "Estas métricas fueron regeneradas con `scripts/generar_resultados.py` a partir del CSV y de los "
-        "modelos entregados (se comprobó que cada partición coincide con su modelo). Con 47 documentos y "
-        "clases desbalanceadas son exploratorias; además la clase está asociada a institución y formato, "
-        "y los resultados podrían no generalizar a fuentes nuevas."
+        "Regeneradas con `scripts/generar_resultados.py` a partir del CSV y de los modelos entregados. Con "
+        "47 documentos y clases desbalanceadas son exploratorias; la clase está asociada a institución y "
+        "formato, así que podrían no generalizar a fuentes nuevas."
     )
 
 
 def pagina_clasificacion():
     st.title("Clasificación de documentos")
+    st.markdown("Indica si un documento **trata o no sobre El Fenómeno El Niño**, usando los modelos "
+                "entrenados por el equipo.")
     conjunto = estado["conjunto"]
     if conjunto is None:
         st.error(f"No se pueden realizar predicciones. {estado['err_mod']}")
-        mostrar_validacion()
         return
     if conjunto.aviso_version:
         st.warning(conjunto.aviso_version)
@@ -465,85 +561,68 @@ def pagina_clasificacion():
     if not docs:
         st.info("Carga documentos en **Carga y extracción** para clasificarlos.")
     else:
-        st.caption("Clase según el promedio de las probabilidades de los 5 modelos (TF-IDF + regresión "
-                   "logística). El texto se normaliza exactamente como en el entrenamiento.")
-        filas = []
+        filas, simple = [], []
         for d in docs:
             r = clasificar(d["texto"])
             fila = {"archivo": d["nombre"], "error": r.get("error", "")}
             if not r["error"]:
                 clase = r["clase"]
+                p = r["prob_nino"] if clase == 1 else 1 - r["prob_nino"]
                 fila.update({
-                    "clase_predicha": NOMBRE_CLASE[clase],
-                    "prob_el_nino": round(r["prob_nino"], 4),
-                    "prob_clase_predicha": round(r["prob_nino"] if clase == 1 else 1 - r["prob_nino"], 4),
+                    "clase_predicha": NOMBRE_CLASE[clase], "prob_el_nino": round(r["prob_nino"], 4),
+                    "prob_clase_predicha": round(p, 4),
                     "modelos_a_favor_el_nino": f'{r["votos_nino"]}/{r["n_modelos"]}',
                     "cobertura_vocabulario": round(r["cobertura_vocabulario"], 3),
-                    "terminos_normalizados": r["n_terminos"],
-                    "metodo_extraccion": d["res"].metodo,
-                })
-                for nom, p in r["por_modelo"]:
-                    fila[f"prob_{nom.replace(' ', '_')}"] = round(p, 4)
+                    "terminos_normalizados": r["n_terminos"], "metodo_extraccion": d["res"].metodo})
+                for nom, pm in r["por_modelo"]:
+                    fila[f"prob_{nom.replace(' ', '_')}"] = round(pm, 4)
+                simple.append({"Archivo": d["nombre"], "Resultado": NOMBRE_CLASE[clase],
+                               "Probabilidad": f"{p:.0%}"})
+            else:
+                simple.append({"Archivo": d["nombre"], "Resultado": "No se pudo clasificar",
+                               "Probabilidad": r["error"]})
             filas.append(fila)
+        st.dataframe(pd.DataFrame(simple), hide_index=True, width="stretch")
         res_df = pd.DataFrame(filas)
-        st.dataframe(res_df.drop(columns=[c for c in res_df if c.startswith("prob_pliegue")]),
-                     hide_index=True, width="stretch")
         if (res_df["error"] == "").any():
             registrar_tabla("clasificacion_documentos.csv", res_df)
 
-        k = st.selectbox("Detalle del documento", range(len(docs)),
-                         format_func=lambda i: docs[i]["nombre"], key="clf_doc")
+        k = st.selectbox("Ver detalle de", range(len(docs)), format_func=lambda i: docs[i]["nombre"],
+                         key="clf_doc")
         d, r = docs[k], clasificar(docs[k]["texto"])
         if r["error"]:
             st.error(r["error"])
         else:
-            clase = r["clase"]
-            p_clase = r["prob_nino"] if clase == 1 else 1 - r["prob_nino"]
-            c = st.columns(4)
-            c[0].metric("Clase predicha", NOMBRE_CLASE[clase])
-            c[1].metric("Probabilidad de esa clase", f"{p_clase:.1%}")
-            c[2].metric("Modelos a favor de El Niño", f'{r["votos_nino"]} de {r["n_modelos"]}')
-            c[3].metric("Cobertura del vocabulario", f'{r["cobertura_vocabulario"]:.0%}')
-            if r["cobertura_vocabulario"] < 0.5:
-                st.warning("Menos de la mitad de los términos del documento está en el vocabulario de los "
-                           "modelos: la predicción es poco fiable.")
-            if r["n_terminos"] < 30:
-                st.warning(f'El texto es corto ({r["n_terminos"]} términos tras normalizar); la predicción '
-                           "puede ser inestable.")
-            if 0.4 <= r["prob_nino"] <= 0.6:
-                st.warning("La probabilidad está cerca de 50 %: el resultado es poco concluyente.")
+            mostrar_resultado_simple(r)
             for a in d["res"].advertencias:
                 st.warning(f"Extracción: {a}")
-            st.caption("La probabilidad proviene de regresión logística y no está calibrada; no equivale a "
-                       "la certeza de que el documento pertenezca a la clase.")
-
-            pm = pd.DataFrame(r["por_modelo"], columns=["modelo", "prob_nino"])
-            fig, ax = plt.subplots(figsize=(6, 2.6))
-            ax.bar(pm["modelo"], pm["prob_nino"], color=ACENTO)
-            ax.axhline(0.5, color=ROJO, linestyle="--", linewidth=1)
-            ax.set_ylim(0, 1); ax.set_ylabel("P(El Niño)")
-            ax.set_title("Probabilidad de El Niño por modelo (línea: umbral 0,5)", fontsize=10, loc="left")
-            ax.spines[["top", "right"]].set_visible(False)
-            ax.tick_params(labelsize=8)
-            fig.tight_layout()
-            st.pyplot(fig)
-            plt.close(fig)
-
-            st.markdown("**Términos que más contribuyen a la clasificación**")
-            st.caption("Contribución = coeficiente del modelo × peso TF-IDF del término, promediada entre los "
-                       "5 modelos. Describe cómo pesa el modelo cada término; no es una explicación causal.")
+            st.markdown("**Palabras que más influyeron en la decisión**")
+            st.caption("Son las palabras del documento que más pesan para el modelo. Muestran cómo decidió "
+                       "el modelo; no prueban que una cosa cause la otra.")
             a, b = st.columns(2)
-            for col, clave, titulo in ((a, "hacia_nino", "Empujan hacia El Niño"),
-                                       (b, "hacia_no_nino", "Empujan hacia No El Niño")):
+            for col, clave, titulo in ((a, "hacia_nino", "Apuntan a: trata de El Niño"),
+                                       (b, "hacia_no_nino", "Apuntan a: no trata de El Niño")):
                 col.markdown(f"*{titulo}*")
                 datos = r["contribuciones"][clave]
                 if datos:
-                    col.dataframe(pd.DataFrame(datos, columns=["término", "contribución"]).round(4),
+                    col.dataframe(pd.DataFrame(datos, columns=["palabra", "influencia"]).round(3),
                                   hide_index=True, width="stretch")
                 else:
-                    col.write("Sin términos relevantes.")
-    st.divider()
-    mostrar_validacion()
+                    col.write("Ninguna destacada.")
+            with st.expander("Detalle técnico"):
+                st.write(f"Cobertura del vocabulario: {r['cobertura_vocabulario']:.0%} de las palabras "
+                         f"relevantes del documento están en el vocabulario de los modelos. La probabilidad "
+                         "viene de una regresión logística y no está calibrada.")
+                pm = pd.DataFrame(r["por_modelo"], columns=["modelo", "prob_nino"])
+                fig, ax = plt.subplots(figsize=(6, 2.6))
+                ax.bar(pm["modelo"], pm["prob_nino"], color=ACENTO)
+                ax.axhline(0.5, color=ROJO, linestyle="--", linewidth=1)
+                ax.set_ylim(0, 1); ax.set_ylabel("Prob. El Niño")
+                ax.set_title("Probabilidad de El Niño según cada modelo", fontsize=10, loc="left")
+                ax.spines[["top", "right"]].set_visible(False); ax.tick_params(labelsize=8)
+                fig.tight_layout(); st.pyplot(fig); plt.close(fig)
+    with st.expander("Para el informe del equipo: cómo se evaluaron los modelos"):
+        mostrar_validacion()
 
 
 # ============================================================================

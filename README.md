@@ -52,7 +52,7 @@ usa solo los del equipo.
 - **Métricas**: no se adjuntó `metricas_clasificador.csv`. Se regeneraron con el procedimiento del notebook
   (`StratifiedGroupKFold`, 5 particiones, `random_state=42`) usando los modelos entregados. Son métricas de
   cada modelo sobre su pliegue; el promedio de los 5 modelos **no fue evaluado como conjunto**.
-- **Palabras clave, frecuencias y resúmenes**: se calculan en la app con los métodos del notebook sobre el
+- **Técnicas NLP sobre el documento cargado**: resumen extractivo, palabras clave (frecuencia y TF-IDF), nube de palabras (`wordcloud`), entidades y temas (por listas y patrones, no es un modelo entrenado) y clasificación. Los cálculos del corpus del equipo se hacen en la app con los métodos del notebook sobre el
   texto OCR del CSV (no se adjuntaron los CSV precalculados).
 
 ## Despliegue en Streamlit Community Cloud
