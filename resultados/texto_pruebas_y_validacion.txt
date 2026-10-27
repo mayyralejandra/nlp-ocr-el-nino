@@ -1,0 +1,10 @@
+PRUEBAS Y VALIDACIÓN
+Se analizaron 47 archivos con texto OCR válido: 32 etiquetados como relacionados con El Niño y 15 como no relacionados. Se utilizó el texto OCR proporcionado por la persona 1 en el archivo Excel; el método y las páginas procesadas deben confirmarse con ella. Las etiquetas se tomaron del Excel y requieren revisión manual del contenido.
+
+Para el análisis NLP se aplicó normalización, eliminación de palabras frecuentes, nube de palabras, extracción de términos mediante TF-IDF y resumen extractivo. El resumen selecciona oraciones existentes; su utilidad debe revisarse manualmente, así como posibles errores heredados del OCR.
+
+Se evaluó un clasificador TF-IDF con regresión logística mediante validación cruzada estratificada de 5 particiones por grupo. Para la clase El Niño, la precisión fue 95.24%, el recall 62.50% y el F1 75.47%. Las predicciones y la matriz de confusión se incluyen en los archivos de resultados.
+
+La calidad del OCR se evalúa mediante CER y WER comparando cada extracción con una transcripción correcta de las mismas páginas. Los resultados por tipo de fuente solo pueden reportarse cuando se completen las referencias. No se debe interpretar el formato como medida de calidad.
+
+Limitaciones: tamaño reducido, desequilibrio entre clases, posible similitud entre documentos y asociación entre institución, formato y clase. Los resultados son exploratorios y podrían no generalizar a fuentes nuevas. Se recomienda ampliar ambas clases, revisar etiquetas y grupos, equilibrar formatos y evaluar documentos de instituciones no vistas.

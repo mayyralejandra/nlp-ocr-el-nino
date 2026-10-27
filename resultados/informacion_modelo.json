@@ -1,0 +1,19 @@
+{
+  "descripcion": "Pipeline TF-IDF + regresión logística",
+  "modelo_final": "Entrenado con todos los textos válidos tras validación cruzada por grupos",
+  "validacion": "StratifiedGroupKFold; 5 particiones; shuffle=True; random_state=42",
+  "documentos_entrenamiento_final": 47,
+  "documentos_por_clase": {
+    "1": 32,
+    "0": 15
+  },
+  "etiquetas": {
+    "0": "No El Niño",
+    "1": "El Niño"
+  },
+  "version_python": "3.13.16",
+  "version_scikit_learn": "1.6.1",
+  "version_joblib": "1.6.0",
+  "entrada_del_pipeline": "texto previamente limpiado; para texto OCR sin limpiar usar predecir_comunicado.py",
+  "metricas": "metricas_clasificador.csv contiene las predicciones fuera de entrenamiento de validación cruzada"
+}

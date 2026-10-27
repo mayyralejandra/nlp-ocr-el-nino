@@ -1,0 +1,11 @@
+# Streamlit Community Cloud: el sistema necesita Tesseract (ver packages.txt).
+streamlit>=1.50
+pandas>=2.2
+numpy>=1.26,<2.3
+pillow>=10.0
+pytesseract>=0.3.10
+pymupdf>=1.24.3
+# Exacta: los modelos .joblib se entrenaron con scikit-learn 1.6.1
+scikit-learn==1.6.1
+joblib>=1.4
+matplotlib>=3.8

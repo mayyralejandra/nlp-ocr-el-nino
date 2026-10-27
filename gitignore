@@ -1,0 +1,27 @@
+# Entornos y cache
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.pytest_cache/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secretos (nunca subir)
+.env
+.streamlit/secrets.toml
+*.key
+*.pem
+credentials*.json
+
+# Archivos pesados / originales (decidir tras revisar tamano y privacidad)
+dataset/
+*.zip
+*.rar
+*.7z
+
+# Salidas temporales
+tmp/
+*.log

@@ -1,0 +1,13 @@
+{
+ "documentos_validos": 47,
+ "documentos_excluidos_sin_texto": 1,
+ "particiones_coinciden_con_modelos": [
+  true,
+  true,
+  true,
+  true,
+  true
+ ],
+ "sklearn_usado": "1.6.1",
+ "metodo": "StratifiedGroupKFold(5, shuffle=True, random_state=42); predicciones de los .joblib entregados"
+}
